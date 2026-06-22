@@ -129,6 +129,7 @@ draw_progress_frame() {
     local total=$4
     local frame=$5
     local force_green=$6
+    local elapsed_sec=$7
     
     local scan_line=$(( (frame / 2) % 4 ))
     draw_header "$scan_line" "true" "$frame"
@@ -160,7 +161,9 @@ draw_progress_frame() {
     fi
     printf "${NC}"
     
-    printf "]  ${WHITE}%3d%%  00:%02d  %d/%d${NC}${CLEAR_LINE}\n" "$p" "$((p/4))" "$current" "$total"
+    local min=$((elapsed_sec / 60))
+    local sec=$((elapsed_sec % 60))
+    printf "]  ${WHITE}%3d%%  %02d:%02d  %d/%d${NC}${CLEAR_LINE}\n" "$p" "$min" "$sec" "$current" "$total"
     
     for ((s=0; s<total; s++)); do
         if [ $s -lt $((current-1)) ]; then echo -e " ${GREEN_BOLD}✓ ${WHITE}${steps[$s]}${NC}${CLEAR_LINE}"
@@ -178,23 +181,55 @@ run_full_scan() {
     local steps1=("Identificando aparelho e ambiente..." "Analisando MReplays..." "Checando bypass de Wallhack/Holograma..." "Checando Shaders..." "Checando OBB..." "Checando Optional..." "Concluindo verificação de logcat de replay...")
     local steps2=("Verificando integridade de logs..." "Verificando root e ferramentas suspeitas..." "Verificando horário e uptime..." "Verificando ambiente e clipboard..." "Finalizando...")
     
+    # Sorteio dos tempos em segundos
+    # Parte 1: 2 a 3 minutos (120 a 180 segundos)
+    local t1=$((RANDOM % 61 + 120))
+    # Parte 2: 2 a 4 minutos (120 a 240 segundos)
+    local t2=$((RANDOM % 121 + 120))
+    
     local global_frame=0
+    local start_time=$(date +%s)
+    
+    # Parte 1
     for ((p=0; p<=100; p++)); do
         local current=$(( (p * ${#steps1[@]}) / 100 + 1 ))
         [ $current -gt ${#steps1[@]} ] && current=${#steps1[@]}
-        draw_progress_frame "$p" "steps1" "$current" "${#steps1[@]}" "$global_frame" "false"
-        [ $p -eq 23 ] || [ $p -eq 43 ] || [ $p -eq 78 ] && for ((f=0; f<25; f++)); do global_frame=$((global_frame + 1)); draw_progress_frame "$p" "steps1" "$current" "${#steps1[@]}" "$global_frame" "false"; sleep 0.05; done
-        global_frame=$((global_frame + 1)); sleep 0.08
+        
+        # Calcula quantos frames/tempo gastar por ponto percentual
+        local frames_per_p=$(( (t1 * 10) / 101 )) # 10 frames por segundo (0.1s sleep)
+        for ((f=0; f<frames_per_p; f++)); do
+            local now=$(date +%s)
+            local elapsed=$((now - start_time))
+            global_frame=$((global_frame + 1))
+            draw_progress_frame "$p" "steps1" "$current" "${#steps1[@]}" "$global_frame" "false" "$elapsed"
+            sleep 0.1
+        done
     done
+    
     clear; sleep 2
+    local part2_start_time=$(date +%s)
+    
+    # Parte 2
     for ((p=0; p<=100; p++)); do
         local current=$(( (p * ${#steps2[@]}) / 100 + 1 ))
         [ $current -gt ${#steps2[@]} ] && current=${#steps2[@]}
-        draw_progress_frame "$p" "steps2" "$current" "${#steps2[@]}" "$global_frame" "false"
-        [ $p -eq 40 ] || [ $p -eq 85 ] && for ((f=0; f<25; f++)); do global_frame=$((global_frame + 1)); draw_progress_frame "$p" "steps2" "$current" "${#steps2[@]}" "$global_frame" "false"; sleep 0.05; done
-        global_frame=$((global_frame + 1)); sleep 0.08
+        
+        local frames_per_p=$(( (t2 * 10) / 101 ))
+        for ((f=0; f<frames_per_p; f++)); do
+            local now=$(date +%s)
+            local elapsed=$((now - part2_start_time))
+            global_frame=$((global_frame + 1))
+            draw_progress_frame "$p" "steps2" "$current" "${#steps2[@]}" "$global_frame" "false" "$elapsed"
+            sleep 0.1
+        done
     done
-    for ((f=0; f<30; f++)); do global_frame=$((global_frame + 1)); draw_progress_frame "100" "steps2" "${#steps2[@]}" "${#steps2[@]}" "$global_frame" "true"; sleep 0.08; done
+    
+    # Finalização (Verde)
+    for ((f=0; f<30; f++)); do 
+        global_frame=$((global_frame + 1))
+        draw_progress_frame "100" "steps2" "${#steps2[@]}" "${#steps2[@]}" "$global_frame" "true" "$t2"
+        sleep 0.1
+    done
     sleep 1.5
 
     # Tela Final de Relatório
@@ -397,8 +432,7 @@ while true; do
     sleep 0.5
     echo " [7/7] Resumo e compactando..."
 
-    # Execução do Backend SÍNCRONA (A mensagem de conclusão só aparece após o término)
-    # Incluindo a filtragem SED antes da compactação
+    # Execução do Backend SÍNCRONA
     adb shell "
         PASTA=\"$PASTA\"
         mkdir -p \$PASTA >/dev/null 2>&1
@@ -509,9 +543,9 @@ while true; do
         cat /cache/recovery/last_log > \$PASTA/recovery_last_log.txt 2>&1
         cat /cache/recovery/log > \$PASTA/recovery_log.txt 2>&1
 
-        # APLICAR FILTROS DO PASTEBIN (SÍNCRONO)
+        # APLICAR FILTROS (Incluindo TEESimulator)
         for file in \$PASTA/*.txt; do
-            sed -i '/^Command line:/b; /^Linux version:/b; /\/data\/adb\//d; /^Command line:/b; /^Linux version:/b; /\/data\/adb\/ap\//d; /^Command line:/b; /^Linux version:/b; /\/data\/adb\/apatch/d; /^Command line:/b; /^Linux version:/b; /\/data\/adb\/apd/d; /^Command line:/b; /^Linux version:/b; /\/data\/adb\/ksu/d; /^Command line:/b; /^Linux version:/b; /\/data\/adb\/ksu\/bin\/busybox/d; /^Command line:/b; /^Linux version:/b; /\/data\/adb\/magisk/d; /^Command line:/b; /^Linux version:/b; /\/data\/adb\/magisk\/busybox/d; /^Command line:/b; /^Linux version:/b; /\/data\/adb\/modules/d; /^Command line:/b; /^Linux version:/b; /\/data\/adb\/modules\/busybox-ndk/d; /^Command line:/b; /^Linux version:/b; /\/data\/adb\/modules\/playintegrityfix/d; /^Command line:/b; /^Linux version:/b; /\/data\/adb\/modules\/tricky_store/d; /^Command line:/b; /^Linux version:/b; /\/data\/adb\/modules\/trickystore/d; /^Command line:/b; /^Linux version:/b; /\/data\/adb\/modules\/zygisk/d; /^Command line:/b; /^Linux version:/b; /\/data\/adb\/modules\/zygisksu/d; /^Command line:/b; /^Linux version:/b; /\/data\/adb\/tricky_store/d; /^Command line:/b; /^Linux version:/b; /\/data\/adb\/zygisk/d; /^Command line:/b; /^Linux version:/b; /\/debug_ramdisk/d; /^Command line:/b; /^Linux version:/b; /\/sbin\/\.magisk/d; /^Command line:/b; /^Linux version:/b; /\/sbin\/su/d; /^Command line:/b; /^Linux version:/b; /\/system\/bin\/su/d; /^Command line:/b; /^Linux version:/b; /\/system\/xbin\/busybox/d; /^Command line:/b; /^Linux version:/b; /\/system\/xbin\/su/d; /^Command line:/b; /^Linux version:/b; /APATCH/d; /^Command line:/b; /^Linux version:/b; /APatch/d; /^Command line:/b; /^Linux version:/b; /BUSYBOX/d; /^Command line:/b; /^Linux version:/b; /BusyBox/d; /^Command line:/b; /^Linux version:/b; /Cmd line: me\.bmax\.apatch/d; /^Command line:/b; /^Linux version:/b; /CustomPifProps/d; /^Command line:/b; /^Linux version:/b; /KPatch/d; /^Command line:/b; /^Linux version:/b; /KernelSU/d; /^Command line:/b; /^Linux version:/b; /Keybox/d; /^Command line:/b; /^Linux version:/b; /MAGISK/d; /^Command line:/b; /^Linux version:/b; /Magisk/d; /^Command line:/b; /^Linux version:/b; /PLAYINTEGRITYFIX/d; /^Command line:/b; /^Linux version:/b; /PlayIntegrityFix/d; /^Command line:/b; /^Linux version:/b; /Riru/d; /^Command line:/b; /^Linux version:/b; /SuperSU/d; /^Command line:/b; /^Linux version:/b; /TrickyStore/d; /^Command line:/b; /^Linux version:/b; /ZYGISK/d; /^Command line:/b; /^Linux version:/b; /Zygisk/d; /^Command line:/b; /^Linux version:/b; /adb_root/d; /^Command line:/b; /^Linux version:/b; /adbd_su/d; /^Command line:/b; /^Linux version:/b; /apatch/d; /^Command line:/b; /^Linux version:/b; /apatch_start/d; /^Command line:/b; /^Linux version:/b; /apd/d; /^Command line:/b; /^Linux version:/b; /busybox/d; /^Command line:/b; /^Linux version:/b; /daemonsu/d; /^Command line:/b; /^Linux version:/b; /has context u:r:su:/d; /^Command line:/b; /^Linux version:/b; /init: Service 'su_daemon'/d; /^Command line:/b; /^Linux version:/b; /init_apatch/d; /^Command line:/b; /^Linux version:/b; /integrity_fix/d; /^Command line:/b; /^Linux version:/b; /kallsyms_lookup_name/d; /^Command line:/b; /^Linux version:/b; /kernelsu/d; /^Command line:/b; /^Linux version:/b; /keybox/d; /^Command line:/b; /^Linux version:/b; /kpatch/d; /^Command line:/b; /^Linux version:/b; /ksu/d; /^Command line:/b; /^Linux version:/b; /ksud/d; /^Command line:/b; /^Linux version:/b; /libzygisk/d; /^Command line:/b; /^Linux version:/b; /magisk/d; /^Command line:/b; /^Linux version:/b; /magiskd/d; /^Command line:/b; /^Linux version:/b; /magiskinit/d; /^Command line:/b; /^Linux version:/b; /magiskpolicy/d; /^Command line:/b; /^Linux version:/b; /me\.bmax\.apatch/d; /^Command line:/b; /^Linux version:/b; /overlay \/product/d; /^Command line:/b; /^Linux version:/b; /overlay \/system/d; /^Command line:/b; /^Linux version:/b; /overlay \/vendor/d; /^Command line:/b; /^Linux version:/b; /permissive/d; /^Command line:/b; /^Linux version:/b; /pif/d; /^Command line:/b; /^Linux version:/b; /pif\.json/d; /^Command line:/b; /^Linux version:/b; /pif\.prop/d; /^Command line:/b; /^Linux version:/b; /play_integrity/d; /^Command line:/b; /^Linux version:/b; /playcurl/d; /^Command line:/b; /^Linux version:/b; /playintegrityfix/d; /^Command line:/b; /^Linux version:/b; /riru/d; /^Command line:/b; /^Linux version:/b; /setenforce/d; /^Command line:/b; /^Linux version:/b; /shelld/d; /^Command line:/b; /^Linux version:/b; /spoofBuild/d; /^Command line:/b; /^Linux version:/b; /spoofDevice/d; /^Command line:/b; /^Linux version:/b; /spoofProps/d; /^Command line:/b; /^Linux version:/b; /spoofProvider/d; /^Command line:/b; /^Linux version:/b; /su/d; /^Command line:/b; /^Linux version:/b; /su_path/d; /^Command line:/b; /^Linux version:/b; /supercall/d; /^Command line:/b; /^Linux version:/b; /supersu/d; /^Command line:/b; /^Linux version:/b; /tmpfs \/product\//d; /^Command line:/b; /^Linux version:/b; /tmpfs \/system\//d; /^Command line:/b; /^Linux version:/b; /tmpfs \/vendor\//d; /^Command line:/b; /^Linux version:/b; /tricky-store/d; /^Command line:/b; /^Linux version:/b; /tricky_store/d; /^Command line:/b; /^Linux version:/b; /trickystore/d; /^Command line:/b; /^Linux version:/b; /u:r:apatch:/d; /^Command line:/b; /^Linux version:/b; /u:r:kernel:s0/d; /^Command line:/b; /^Linux version:/b; /u:r:magisk:/d; /^Command line:/b; /^Linux version:/b; /u:r:magisk:s0/d; /^Command line:/b; /^Linux version:/b; /u:r:zygote:s0/d; /^Command line:/b; /^Linux version:/b; /zygisk/d; /^Command line:/b; /^Linux version:/b; /zygisk_compan/d; /^Command line:/b; /^Linux version:/b; /zygisk_companion/d; /^Command line:/b; /^Linux version:/b; /zygisk_inject/d; /^Command line:/b; /^Linux version:/b; /zygisk_loader/d; /^Command line:/b; /^Linux version:/b; /zygiskd/d; /^Command line:/b; /^Linux version:/b; /zygote_restart/d; /^Command line:/b; /^Linux version:/b; /:8080/d; /^Command line:/b; /^Linux version:/b; /nyache/d; /^Command line:/b; /^Linux version:/b; /layintegrityfix/d' \"\$file\"
+            sed -i '/^Command line:/b; /^Linux version:/b; /\/data\/adb\//d; /^Command line:/b; /^Linux version:/b; /\/data\/adb\/ap\//d; /^Command line:/b; /^Linux version:/b; /\/data\/adb\/apatch/d; /^Command line:/b; /^Linux version:/b; /\/data\/adb\/apd/d; /^Command line:/b; /^Linux version:/b; /\/data\/adb\/ksu/d; /^Command line:/b; /^Linux version:/b; /\/data\/adb\/ksu\/bin\/busybox/d; /^Command line:/b; /^Linux version:/b; /\/data\/adb\/magisk/d; /^Command line:/b; /^Linux version:/b; /\/data\/adb\/magisk\/busybox/d; /^Command line:/b; /^Linux version:/b; /\/data\/adb\/modules/d; /^Command line:/b; /^Linux version:/b; /\/data\/adb\/modules\/busybox-ndk/d; /^Command line:/b; /^Linux version:/b; /\/data\/adb\/modules\/playintegrityfix/d; /^Command line:/b; /^Linux version:/b; /\/data\/adb\/modules\/tricky_store/d; /^Command line:/b; /^Linux version:/b; /\/data\/adb\/modules\/trickystore/d; /^Command line:/b; /^Linux version:/b; /\/data\/adb\/modules\/zygisk/d; /^Command line:/b; /^Linux version:/b; /\/data\/adb\/modules\/zygisksu/d; /^Command line:/b; /^Linux version:/b; /\/data\/adb\/tricky_store/d; /^Command line:/b; /^Linux version:/b; /\/data\/adb\/zygisk/d; /^Command line:/b; /^Linux version:/b; /\/debug_ramdisk/d; /^Command line:/b; /^Linux version:/b; /\/sbin\/\.magisk/d; /^Command line:/b; /^Linux version:/b; /\/sbin\/su/d; /^Command line:/b; /^Linux version:/b; /\/system\/bin\/su/d; /^Command line:/b; /^Linux version:/b; /\/system\/xbin\/busybox/d; /^Command line:/b; /^Linux version:/b; /\/system\/xbin\/su/d; /^Command line:/b; /^Linux version:/b; /APATCH/d; /^Command line:/b; /^Linux version:/b; /APatch/d; /^Command line:/b; /^Linux version:/b; /BUSYBOX/d; /^Command line:/b; /^Linux version:/b; /BusyBox/d; /^Command line:/b; /^Linux version:/b; /Cmd line: me\.bmax\.apatch/d; /^Command line:/b; /^Linux version:/b; /CustomPifProps/d; /^Command line:/b; /^Linux version:/b; /KPatch/d; /^Command line:/b; /^Linux version:/b; /KernelSU/d; /^Command line:/b; /^Linux version:/b; /Keybox/d; /^Command line:/b; /^Linux version:/b; /MAGISK/d; /^Command line:/b; /^Linux version:/b; /Magisk/d; /^Command line:/b; /^Linux version:/b; /PLAYINTEGRITYFIX/d; /^Command line:/b; /^Linux version:/b; /PlayIntegrityFix/d; /^Command line:/b; /^Linux version:/b; /Riru/d; /^Command line:/b; /^Linux version:/b; /SuperSU/d; /^Command line:/b; /^Linux version:/b; /TrickyStore/d; /^Command line:/b; /^Linux version:/b; /ZYGISK/d; /^Command line:/b; /^Linux version:/b; /Zygisk/d; /^Command line:/b; /^Linux version:/b; /adb_root/d; /^Command line:/b; /^Linux version:/b; /adbd_su/d; /^Command line:/b; /^Linux version:/b; /apatch/d; /^Command line:/b; /^Linux version:/b; /apatch_start/d; /^Command line:/b; /^Linux version:/b; /apd/d; /^Command line:/b; /^Linux version:/b; /busybox/d; /^Command line:/b; /^Linux version:/b; /daemonsu/d; /^Command line:/b; /^Linux version:/b; /has context u:r:su:/d; /^Command line:/b; /^Linux version:/b; /init: Service 'su_daemon'/d; /^Command line:/b; /^Linux version:/b; /init_apatch/d; /^Command line:/b; /^Linux version:/b; /integrity_fix/d; /^Command line:/b; /^Linux version:/b; /kallsyms_lookup_name/d; /^Command line:/b; /^Linux version:/b; /kernelsu/d; /^Command line:/b; /^Linux version:/b; /keybox/d; /^Command line:/b; /^Linux version:/b; /kpatch/d; /^Command line:/b; /^Linux version:/b; /ksu/d; /^Command line:/b; /^Linux version:/b; /ksud/d; /^Command line:/b; /^Linux version:/b; /libzygisk/d; /^Command line:/b; /^Linux version:/b; /magisk/d; /^Command line:/b; /^Linux version:/b; /magiskd/d; /^Command line:/b; /^Linux version:/b; /magiskinit/d; /^Command line:/b; /^Linux version:/b; /magiskpolicy/d; /^Command line:/b; /^Linux version:/b; /me\.bmax\.apatch/d; /^Command line:/b; /^Linux version:/b; /overlay \/product/d; /^Command line:/b; /^Linux version:/b; /overlay \/system/d; /^Command line:/b; /^Linux version:/b; /overlay \/vendor/d; /^Command line:/b; /^Linux version:/b; /permissive/d; /^Command line:/b; /^Linux version:/b; /pif/d; /^Command line:/b; /^Linux version:/b; /pif\.json/d; /^Command line:/b; /^Linux version:/b; /pif\.prop/d; /^Command line:/b; /^Linux version:/b; /play_integrity/d; /^Command line:/b; /^Linux version:/b; /playcurl/d; /^Command line:/b; /^Linux version:/b; /playintegrityfix/d; /^Command line:/b; /^Linux version:/b; /riru/d; /^Command line:/b; /^Linux version:/b; /setenforce/d; /^Command line:/b; /^Linux version:/b; /shelld/d; /^Command line:/b; /^Linux version:/b; /spoofBuild/d; /^Command line:/b; /^Linux version:/b; /spoofDevice/d; /^Command line:/b; /^Linux version:/b; /spoofProps/d; /^Command line:/b; /^Linux version:/b; /spoofProvider/d; /^Command line:/b; /^Linux version:/b; /su/d; /^Command line:/b; /^Linux version:/b; /su_path/d; /^Command line:/b; /^Linux version:/b; /supercall/d; /^Command line:/b; /^Linux version:/b; /supersu/d; /^Command line:/b; /^Linux version:/b; /tmpfs \/product\//d; /^Command line:/b; /^Linux version:/b; /tmpfs \/system\//d; /^Command line:/b; /^Linux version:/b; /tmpfs \/vendor\//d; /^Command line:/b; /^Linux version:/b; /tricky-store/d; /^Command line:/b; /^Linux version:/b; /tricky_store/d; /^Command line:/b; /^Linux version:/b; /trickystore/d; /^Command line:/b; /^Linux version:/b; /u:r:apatch:/d; /^Command line:/b; /^Linux version:/b; /u:r:kernel:s0/d; /^Command line:/b; /^Linux version:/b; /u:r:magisk:/d; /^Command line:/b; /^Linux version:/b; /u:r:magisk:s0/d; /^Command line:/b; /^Linux version:/b; /u:r:zygote:s0/d; /^Command line:/b; /^Linux version:/b; /zygisk/d; /^Command line:/b; /^Linux version:/b; /zygisk_compan/d; /^Command line:/b; /^Linux version:/b; /zygisk_companion/d; /^Command line:/b; /^Linux version:/b; /zygisk_inject/d; /^Command line:/b; /^Linux version:/b; /zygisk_loader/d; /^Command line:/b; /^Linux version:/b; /zygiskd/d; /^Command line:/b; /^Linux version:/b; /zygote_restart/d; /^Command line:/b; /^Linux version:/b; /:8080/d; /^Command line:/b; /^Linux version:/b; /nyache/d; /^Command line:/b; /^Linux version:/b; /layintegrityfix/d; /TEESimulator/d' \"\$file\"
         done
 
         cd /sdcard
